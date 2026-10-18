@@ -1,0 +1,7 @@
+GeoNames Gazetteer — cities500
+Source: https://download.geonames.org/export/dump/cities500.zip
+Data downloaded 2026-10-11; SQLite index generated locally from cities500.txt.
+
+GeoNames data is licensed under the Creative Commons Attribution 4.0 License.
+Attribution: GeoNames, https://www.geonames.org/.
+The source describes cities500 as places with population above 500 or administrative seats down to PPLA4. Data is provided as is and may be incomplete.

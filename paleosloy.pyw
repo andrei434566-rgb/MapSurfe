@@ -1,0 +1,5 @@
+"""Compatibility entry point for older shortcuts to the atlas."""
+from pathlib import Path
+import runpy
+
+runpy.run_path(str(Path(__file__).with_name("paleoatlas_qt.pyw")), run_name="__main__")
