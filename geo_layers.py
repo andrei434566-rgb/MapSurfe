@@ -112,57 +112,16 @@ def _from_kml(path: Path) -> list[PolygonFeature]:
     return features
 
 
-def _from_cps3_ascii(path: Path) -> list[PolygonFeature]:
-    """Read CPS-3 ASCII XY polygon subsets (->name, then X Y [Z] rows).
+def _from_cps3_ascii(path: Path, *, source_crs: str = "EPSG:4326",
+                     axis_order: str = "xy") -> list[PolygonFeature]:
+    """Load CPS-3 ASCII XY polygons using the declared CRS and order.
 
-    CPS-3 also exports grids and can use projected coordinates. Those cannot
-    be positioned on a globe without their CRS and are rejected explicitly.
+    For example SK-42 6-degree Gauss-Kruger zone 13: EPSG:28413.
+    Use axis_order="yx" for Northing/Easting input. Never guess a CRS.
     """
-    raw = path.read_bytes()
-    for encoding in ("utf-8-sig", "cp1251", "cp1252"):
-        try:
-            lines = raw.decode(encoding).splitlines()
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        raise ValueError("Не удалось прочитать текст CPS-3.")
-    features: list[PolygonFeature] = []
-    points: list[tuple[float, float]] = []
-    name = path.stem
-
-    def finish():
-        nonlocal points
-        if points:
-            features.append(PolygonFeature(name, [_ring(points)]))
-            points = []
-
-    for line_number, original in enumerate(lines, 1):
-        line = original.strip()
-        if not line or line.startswith(("!", "#")):
-            continue
-        if line.startswith("->"):
-            finish()
-            name = line[2:].strip() or f"Участок {len(features)+1}"
-            continue
-        if line.startswith("@"):
-            raise ValueError("Это сетка CPS-3/ZMAP, а не полигон XY. Экспортируй границы участков как CPS-3 ASCII XY.")
-        fields = line.replace(",", " ").replace(";", " ").split()
-        if len(fields) < 2:
-            if not points:
-                continue
-            raise ValueError(f"Некорректная строка CPS-3 {line_number}: ожидались X Y.")
-        try:
-            lon, lat = float(fields[0]), float(fields[1])
-        except ValueError:
-            if not points:
-                continue
-            raise ValueError(f"Некорректная строка CPS-3 {line_number}: ожидались числовые X Y.") from None
-        if not (-180 <= lon <= 180 and -90 <= lat <= 90):
-            raise ValueError("Координаты CPS-3 выглядят проекционными. Для глобуса экспортируй XY в WGS84 (долгота, широта), либо предоставь CRS исходного файла.")
-        points.append((lon, lat))
-    finish()
-    return features
+    from cps3_convert import to_wgs84_polygons
+    return [PolygonFeature(name, [_ring(points)]) for name, points in
+            to_wgs84_polygons(path, source_crs, axis_order=axis_order)]
 
 
 def _dbf_names(raw: bytes, count: int) -> list[str]:
@@ -255,7 +214,8 @@ def _from_shapefile_zip(path: Path) -> list[PolygonFeature]:
     return features
 
 
-def load_polygon_layer(path: str | Path) -> PolygonLayer:
+def load_polygon_layer(path: str | Path, *, source_crs: str = "EPSG:4326",
+                       axis_order: str = "xy") -> PolygonLayer:
     source = Path(path)
     if source.stat().st_size > MAX_BYTES:
         raise ValueError("Слой больше 60 МБ. Упрости геометрию или раздели файл.")
@@ -267,7 +227,7 @@ def load_polygon_layer(path: str | Path) -> PolygonLayer:
     elif suffix == ".zip":
         features = _from_shapefile_zip(source)
     elif suffix in (".cps", ".cps3", ".dat", ".pol", ".txt"):
-        features = _from_cps3_ascii(source)
+        features = _from_cps3_ascii(source, source_crs=source_crs, axis_order=axis_order)
     else:
         raise ValueError("Поддерживаются CPS-3 ASCII XY, GeoJSON, KML и Shapefile ZIP в WGS84.")
     if not features:
