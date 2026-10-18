@@ -1,0 +1,22 @@
+name: CPS-3 coordinates
+on:
+  push:
+    branches: ["feature/cps3-gauss-kruger-vivid-palette"]
+  pull_request:
+    paths:
+      - "paleo_coordinates.py"
+      - "cps3_convert.py"
+      - "geo_layers.py"
+      - "paleo_visual_data.py"
+      - "tests/**"
+      - ".github/workflows/cps3-tests.yml"
+jobs:
+  cps3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -U pip pytest "pyproj>=3.6,<4"
+      - run: python -m pytest -q tests/test_cps3_coordinates.py
