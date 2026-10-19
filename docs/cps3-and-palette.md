@@ -5,13 +5,12 @@
 This update handles **CPS-3 ASCII XY polygon contours** with named records (`->NAME`),
 not regular CPS-3/ZMAP grids. It adds CRS transformations using `pyproj` and changes
 the *display palette* for PaleoDEM. It does **not** change heights, shorelines or
-the tectonic reconstruction model. The main UI file `paleoatlas_qt.pyw` is not
-currently in GitHub, so the import dialog must be integrated separately.
+the tectonic reconstruction model. The Qt interface `paleoatlas_qt.pyw` includes CRS and axis-order selection on CPS-3 import and a separate conversion action.
 
 ## Setup
 
 ```shell
-python -m pip install -r requirements-geo.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1
 ```
 
 ## Export projected CPS-3 (WGS84 to Gauss–Krüger)
@@ -59,5 +58,5 @@ python -m pytest -q tests/test_cps3_coordinates.py
 
 The code requires an explicitly supplied source CRS for projected data and
 does not attempt to infer it from numerical coordinate ranges. Multi-plate
-tectonic reconstruction, polygon hole semantics and UI CRS selection remain
-separate follow-up tasks.
+tectonic reconstruction and polygon hole semantics remain separate follow-up tasks.
+The Windows application requires the map assets supplied by the official release.
