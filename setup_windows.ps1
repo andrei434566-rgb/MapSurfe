@@ -40,11 +40,21 @@ if (-not (Test-Path $pythonExe)) {
 if (-not (Test-Path $pythonExe)) { throw "Virtual environment Python is missing." }
 
 Write-Host ""
-Write-Host "[1/3] Installing/updating dependencies..." -ForegroundColor Cyan
-& $pythonExe -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
-& $pythonExe -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+Write-Host "[1/3] Checking Python dependencies..." -ForegroundColor Cyan
+$reqFile = Join-Path $PSScriptRoot "requirements.txt"
+$depsStamp = Join-Path $venv "map_surfe_deps.sha256"
+$expectedHash = (Get-FileHash $reqFile -Algorithm SHA256).Hash
+$installedHash = if (Test-Path $depsStamp) { (Get-Content $depsStamp -Raw).Trim() } else { "" }
+if ($expectedHash -ne $installedHash) {
+    Write-Host "Installing desktop libraries (once per requirements.txt update)..." -ForegroundColor Cyan
+    & $pythonExe -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
+    & $pythonExe -m pip install -r $reqFile
+    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+    Set-Content -Path $depsStamp -Value $expectedHash -NoNewline -Encoding ascii
+} else {
+    Write-Host "Dependencies already installed. No network access needed." -ForegroundColor Green
+}
 
 Write-Host ""
 Write-Host "[2/3] Checking and installing map assets..." -ForegroundColor Cyan
