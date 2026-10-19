@@ -11,7 +11,7 @@ import traceback
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QSurfaceFormat
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea,
     QSlider, QTabWidget, QVBoxLayout, QWidget,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 from atlas_features import AtlasFeature, FEATURES
 from city_catalog import CityCatalog
 from geo_layers import load_polygon_layer
+from paleo_coordinates import CoordinateTransformer
+from cps3_convert import convert_cps3_file
 from paleo_globe import MAX_ZOOM, GlobeWidget
 from paleo_model import MAX_AGE, PaleoModel
 from paleogeography import UNITS, active_units, age_story
@@ -146,6 +148,72 @@ class CitySearchDialog(QDialog):
                                         item.data(Qt.UserRole + 1))
         if self.place:
             self.accept()
+
+
+class CPS3CoordinateDialog(QDialog):
+    """Explicitly select CRS and axis order; never guess a survey projection."""
+    def __init__(self, parent=None, *, exporting=False):
+        super().__init__(parent)
+        self.exporting = exporting
+        self.setWindowTitle("Координаты CPS-3 / Гаусс — Крюгер")
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        layout.addWidget(label("СИСТЕМА КООРДИНАТ", CYAN, 9, True))
+        layout.addWidget(label(
+            "Укажите точный EPSG исходного файла. Нельзя надёжно определять "
+            "СК и зону только по числам координат.", MUTED, 9))
+        form = QFormLayout()
+        self.source = QComboBox()
+        self.source.setEditable(True)
+        self.source.addItems([
+            "EPSG:4326", "EPSG:28413", "EPSG:28412", "EPSG:28414",
+            "EPSG:20013",
+        ])
+        self.source.setCurrentText("EPSG:4326")
+        form.addRow("Исходная СК (EPSG)", self.source)
+        self.axis = QComboBox()
+        self.axis.addItem("X — восток, Y — север (XY)", "xy")
+        self.axis.addItem("X — север, Y — восток (YX)", "yx")
+        form.addRow("Порядок координат", self.axis)
+        if exporting:
+            self.target = QComboBox()
+            self.target.setEditable(True)
+            self.target.addItems(["EPSG:28413", "EPSG:28412", "EPSG:28414", "EPSG:20013", "EPSG:4326"])
+            form.addRow("Целевая СК (EPSG)", self.target)
+            self.target_axis = QComboBox()
+            self.target_axis.addItem("X — восток, Y — север (XY)", "xy")
+            self.target_axis.addItem("X — север, Y — восток (YX)", "yx")
+            form.addRow("Порядок на выходе", self.target_axis)
+        else:
+            self.target = None
+            self.target_axis = None
+            form.addRow("На глобусе", label("WGS84 / EPSG:4326", FG, 9))
+        layout.addLayout(form)
+        layout.addWidget(label("EPSG:28413 (СК-42 / 6° зона 13) приведён "
+                               "лишь как пример — выберите свою зону.", GOLD, 9))
+        controls = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        controls.accepted.connect(self.validate_and_accept)
+        controls.rejected.connect(self.reject)
+        layout.addWidget(controls)
+
+    def validate_and_accept(self):
+        try:
+            CoordinateTransformer(self.source.currentText().strip(),
+                                  self.target.currentText().strip() if self.exporting else "EPSG:4326",
+                                  source_axis_order=self.axis.currentData(),
+                                  target_axis_order=self.target_axis.currentData() if self.exporting else "xy")
+        except Exception as exc:
+            QMessageBox.warning(self, "Неверная система координат", str(exc))
+            return
+        self.accept()
+
+    @property
+    def crs(self):
+        return self.source.currentText().strip()
+
+    @property
+    def order(self):
+        return self.axis.currentData()
 
 
 class AtlasWindow(QMainWindow):
@@ -355,8 +423,9 @@ class AtlasWindow(QMainWindow):
         layout = self._tab("Полигоны")
         layout.addWidget(label("ЛИЦЕНЗИОННЫЕ УЧАСТКИ", CYAN, 9, True))
         layout.addWidget(label("Слои полигонов", FG, 16, True))
-        layout.addWidget(label("CPS-3 ASCII XY · GeoJSON · KML · Shapefile ZIP\nWGS84 / EPSG:4326", MUTED, 9))
+        layout.addWidget(label("CPS-3 ASCII XY (с выбором CRS) · GeoJSON · KML · Shapefile ZIP\nПересчёт Гаусса — Крюгера → WGS84", MUTED, 9))
         layout.addWidget(button("＋ Добавить слой", self.add_layer, True))
+        layout.addWidget(button("⇄ Конвертировать CPS-3 в другую СК", self.convert_cps3))
         self.layer_list = QListWidget()
         self.layer_list.currentRowChanged.connect(self.layer_selected)
         layout.addWidget(self.layer_list, 1)
@@ -612,8 +681,14 @@ class AtlasWindow(QMainWindow):
                   "Геоданные (*.cps *.cps3 *.dat *.pol *.txt *.geojson *.json *.kml *.zip);;Все файлы (*.*)")
         if not path:
             return
+        opts = {"source_crs": "EPSG:4326", "axis_order": "xy"}
+        if Path(path).suffix.lower() in (".cps", ".cps3", ".dat", ".pol", ".txt"):
+            dialog = CPS3CoordinateDialog(self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            opts = {"source_crs": dialog.crs, "axis_order": dialog.order}
         try:
-            layer = load_polygon_layer(path)
+            layer = load_polygon_layer(path, **opts)
         except Exception as exc:
             self.show_error(str(exc))
             return
@@ -621,6 +696,33 @@ class AtlasWindow(QMainWindow):
         self.layer_list.addItem(f"●  {layer.name} ({len(layer.features)})")
         self.layer_list.setCurrentRow(len(self.layers)-1)
         self.focus_layer()
+
+    def convert_cps3(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите CPS-3 ASCII XY", "",
+            "CPS-3 (*.cps *.cps3 *.dat *.pol *.txt);;Все файлы (*.*)")
+        if not path:
+            return
+        dialog = CPS3CoordinateDialog(self, exporting=True)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить преобразованный CPS-3",
+            str(Path(path).with_name(Path(path).stem + "_converted.cps")),
+            "CPS-3 (*.cps *.cps3);;Все файлы (*.*)")
+        if not destination:
+            return
+        try:
+            output = convert_cps3_file(
+                path, destination,
+                source_crs=dialog.crs,
+                target_crs=dialog.target.currentText().strip(),
+                source_axis_order=dialog.order,
+                target_axis_order=dialog.target_axis.currentData())
+            QMessageBox.information(self, "Координаты преобразованы",
+                                    f"Файл сохранён:\n{output}")
+        except Exception as exc:
+            self.show_error(str(exc))
 
     def layer_selected(self, index):
         layer = self._chosen_layer()
@@ -827,7 +929,9 @@ class AtlasWindow(QMainWindow):
                 path = Path(item["path"])
                 if path.exists():
                     try:
-                        layer = load_polygon_layer(path)
+                        layer = load_polygon_layer(path,
+                            source_crs=str(item.get("source_crs", "EPSG:4326")),
+                            axis_order=str(item.get("axis_order", "xy")))
                     except Exception:
                         continue
                     layer.visible = bool(item.get("visible", True))
@@ -871,7 +975,9 @@ class AtlasWindow(QMainWindow):
             "selected_paleo_units": sorted(self.selected_paleo_units),
             "custom_features": [{"name": f.name, "lat": f.lat, "lon": f.lon, "plate": f.plate}
                                 for f in self.custom_features],
-            "layers": [{"path": str(layer.path), "visible": layer.visible} for layer in self.layers],
+            "layers": [{"path": str(layer.path), "visible": layer.visible,
+                        "source_crs": layer.source_crs, "axis_order": layer.axis_order}
+                       for layer in self.layers],
         }
         try:
             temp = self.session_path.with_suffix(".tmp")
