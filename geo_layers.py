@@ -33,6 +33,8 @@ class PolygonLayer:
     features: list[PolygonFeature]
     plate: str = "Евразия"
     visible: bool = True
+    source_crs: str = "EPSG:4326"
+    axis_order: str = "xy"
 
 
 def _ring(points) -> list[tuple[float, float]]:
@@ -234,4 +236,5 @@ def load_polygon_layer(path: str | Path, *, source_crs: str = "EPSG:4326",
         raise ValueError("В файле нет полигонов.")
     if sum(len(ring) for feature in features for ring in feature.rings) > MAX_VERTICES:
         raise ValueError("Больше 250 000 вершин. Упрости слой перед импортом.")
-    return PolygonLayer(source.stem, source, features)
+    return PolygonLayer(source.stem, source, features, source_crs=source_crs,
+                        axis_order=axis_order)
