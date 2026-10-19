@@ -16,21 +16,22 @@ import netCDF4
 import numpy as np
 
 
+# High-chroma PALEOMAP-inspired ocean/relief palette.
+# Visualization only: DEM heights and derived coastlines remain unchanged.
 SEA_STOPS = [
-    (-5200, (3, 19, 61)), (-4500, (5, 35, 92)),
-    (-3500, (5, 63, 126)), (-2600, (6, 91, 166)),
-    (-1600, (8, 128, 197)), (-800, (10, 171, 222)),
-    (-250, (34, 202, 232)), (-30, (89, 223, 237)),
-    (0, (138, 232, 232)),
+    (-5200, (1, 20, 64)), (-4500, (2, 37, 98)),
+    (-3500, (3, 72, 151)), (-2600, (5, 107, 185)),
+    (-1600, (11, 148, 217)), (-800, (32, 181, 230)),
+    (-250, (78, 207, 242)), (-30, (119, 222, 247)),
+    (0, (146, 235, 247)),
 ]
 LAND_STOPS = [
-    (0, (26, 91, 43)), (90, (40, 126, 49)),
-    (260, (70, 154, 61)), (500, (111, 170, 70)),
-    (800, (158, 174, 78)), (1150, (194, 165, 86)),
-    (1600, (215, 149, 80)), (2200, (159, 108, 67)),
-    (3100, (230, 199, 139)), (4300, (245, 225, 180)),
+    (0, (17, 87, 39)), (90, (25, 112, 40)),
+    (260, (46, 131, 45)), (500, (81, 151, 49)),
+    (800, (129, 161, 55)), (1150, (172, 163, 61)),
+    (1600, (202, 155, 71)), (2200, (207, 134, 71)),
+    (3100, (229, 181, 111)), (4300, (249, 226, 183)),
 ]
-
 
 def _make_lut(stops, low, high):
     height = np.arange(low, high + 1, dtype=np.float32)
@@ -51,8 +52,8 @@ class PaleoVisualData:
         high_resolution = directory / "paleodem_01deg.zip"
         self.path = high_resolution if high_resolution.exists() else directory / "paleodem_02deg.zip"
         self.resolution = "0,1°" if high_resolution.exists() else "0,2°"
-        self.color_cache = directory / ("paleodem_color_01deg_v2" if high_resolution.exists()
-                                        else "paleodem_color_v1")
+        self.color_cache = directory / ("paleodem_color_01deg_vivid_v1" if high_resolution.exists()
+                                        else "paleodem_color_vivid_v1")
         if not self.path.exists():
             raise FileNotFoundError(f"Нет набора PaleoDEM 2018: {self.path}")
         with zipfile.ZipFile(self.path) as archive:

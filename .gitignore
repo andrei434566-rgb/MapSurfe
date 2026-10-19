@@ -218,3 +218,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MapSurfe large scientific data and user-local state
+.venv/
+.downloads/
+model/
+paleoatlas_rasters/
+cities500.zip
+paleodem_*.zip
+paleodem_color_*/
+paleosloy_session.json
+paleoatlas-qt-error.log
+MapSurfe-source.zip
+*.installing

@@ -1,0 +1,43 @@
+name: MapSurfe startup and CPS-3
+on:
+  push:
+    branches: ["feature/cps3-gauss-kruger-vivid-palette", "main"]
+  pull_request:
+jobs:
+  coordinates-and-archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install -U pip pytest "pyproj>=3.6,<4"
+      - name: Compile Python sources
+        run: python -m compileall -q paleoatlas_qt.pyw paleo_globe.py geo_layers.py paleo_model.py paleo_visual_data.py cps3_convert.py paleo_coordinates.py tools
+      - name: Test coordinate transforms and archive extraction
+        run: python -m pytest -q tests/test_cps3_coordinates.py tests/test_asset_setup.py
+
+  windows-dependencies:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+      - name: Install Windows desktop dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("setup_windows.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+      - name: Import Qt OpenGL GPlates and scientific modules
+        run: python -c "import PySide6, OpenGL, pygplates, cv2, netCDF4, numpy, pyproj; from paleo_globe import GlobeWidget; from paleo_model import PaleoModel; from paleo_visual_data import PaleoVisualData; print('Windows imports OK')"
+      - name: Check desktop app syntax
+        run: python -m py_compile paleoatlas_qt.pyw
+      - name: Run coordinate tests on Windows
+        run: python -m pytest -q tests/test_cps3_coordinates.py tests/test_asset_setup.py
