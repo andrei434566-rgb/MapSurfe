@@ -28,6 +28,13 @@ jobs:
           architecture: "x64"
       - name: Install Windows desktop dependencies
         run: python -m pip install -r requirements.txt pytest
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("setup_windows.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
       - name: Import Qt OpenGL GPlates and scientific modules
         run: python -c "import PySide6, OpenGL, pygplates, cv2, netCDF4, numpy, pyproj; from paleo_globe import GlobeWidget; from paleo_model import PaleoModel; from paleo_visual_data import PaleoVisualData; print('Windows imports OK')"
       - name: Check desktop app syntax
