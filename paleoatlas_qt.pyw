@@ -5,8 +5,45 @@ import ctypes
 import json
 import math
 from pathlib import Path
+import sys
 from time import perf_counter
 import traceback
+
+from runtime_paths import (
+    APP_NAME, APP_VERSION, error_log_path, is_frozen, resource_dir, session_path,
+)
+
+
+def _unhandled_exception(exc_type, exception, tb):
+    """Report startup failures even when a bundled native import fails."""
+    if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+        sys.__excepthook__(exc_type, exception, tb)
+        return
+    detail = "".join(traceback.format_exception(exc_type, exception, tb))
+    try:
+        log = error_log_path()
+        log.write_text(f"{APP_NAME} {APP_VERSION}\n\n{detail}", encoding="utf-8")
+        location = f"Подробности записаны в файл:\n{log}"
+    except OSError:
+        location = "Не удалось сохранить журнал ошибки в папку приложения."
+    if is_frozen():
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                f"Не удалось запустить или продолжить работу {APP_NAME}.\n\n"
+                f"{exception}\n\n{location}",
+                f"{APP_NAME} — ошибка",
+                0x10,
+            )
+        except (AttributeError, OSError):
+            pass
+    else:
+        sys.__excepthook__(exc_type, exception, tb)
+
+
+if __name__ == "__main__":
+    # Install before Qt, GDAL, and netCDF imports, so missing DLLs get a log too.
+    sys.excepthook = _unhandled_exception
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QSurfaceFormat
@@ -22,10 +59,10 @@ from city_catalog import CityCatalog
 from geo_layers import load_polygon_layer
 from paleo_coordinates import CoordinateTransformer
 from cps3_convert import convert_cps3_file
-from paleo_globe import MAX_ZOOM, GlobeWidget
+from paleo_globe import DEFAULT_SHARPNESS, MAX_SHARPNESS, MAX_ZOOM, GlobeWidget
 from paleo_model import MAX_AGE, PaleoModel
 from paleogeography import UNITS, active_units, age_story
-from paleo_visual_data import PaleoVisualData
+from paleo_visual_data import PaleoVisualData, relief_legend
 
 
 BG = "#061322"
@@ -68,6 +105,20 @@ PERIODS = [
     (720, "Криогений", "ПРОТЕРОЗОЙ"),
     (750, "Неопротерозой", "ПРОТЕРОЗОЙ"),
 ]
+EPOCH_STOPS = (
+    (750, "Родиния", "rodinia", None,
+     "Суперконтинент Родиния и окружающий её предполагаемый океан Мировия."),
+    (600, "Сборка Гондваны", "gondwana", None,
+     "Южные континентальные блоки сближаются при сборке Гондваны; Лаврентия, Балтика и Сибирь остаются отдельными."),
+    (360, "Сборка Пангеи", None, "Урал",
+     "Материки сближаются, закрывая океанические бассейны."),
+    (280, "Пангея", "pangaea", None,
+     "Пангея окружена океаном Панталасса и бассейнами Тетиса."),
+    (120, "Индия движется на север", None, "Индостан",
+     "Индийский блок быстро смещается к Евразии; впереди столкновение и рост Гималаев."),
+    (0, "Современная Земля", None, None,
+     "Континенты близки к современным, хотя движение плит продолжается."),
+)
 
 
 def wrap(lon):
@@ -219,14 +270,14 @@ class CPS3CoordinateDialog(QDialog):
 class AtlasWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Палеоатлас · Земля сквозь время")
+        self.setWindowTitle(f"{APP_NAME} {APP_VERSION} · Земля сквозь время")
         self.resize(1380, 820)
         self.setMinimumSize(1040, 660)
-        self.directory = Path(__file__).resolve().parent
+        self.directory = resource_dir()
         self.city_catalog = CityCatalog(self.directory)
         self.model = PaleoModel(self.directory / "model")
         self.data = PaleoVisualData(self.directory, self.model.rasters)
-        self.session_path = self.directory / "paleosloy_session.json"
+        self.session_path = session_path()
         self.age = 140.0
         self.city = CITIES[0]
         self.compare_city = CITIES[1]
@@ -247,7 +298,7 @@ class AtlasWindow(QMainWindow):
         self._restore_session()
         mode, younger, older, _ = self.data.frames(self.age)
         for published_age in {younger, older}:
-            self.globe._decoded[(mode, published_age)] = self.data.image(mode, published_age)
+            self.globe._decoded[(mode, published_age)] = self.data.texture(mode, published_age)
         self.set_age(self.age)
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.PreciseTimer)
@@ -276,6 +327,7 @@ class AtlasWindow(QMainWindow):
         self._make_places_tab()
         self._make_polygon_tab()
         self._make_labels_tab()
+        self._make_epochs_tab()
         body.addWidget(self.tabs)
         right = QVBoxLayout()
         right.setSpacing(10)
@@ -288,10 +340,10 @@ class AtlasWindow(QMainWindow):
         names.setSpacing(0)
         self.era_label = label("МЕЗОЗОЙ", CYAN, 9, True)
         self.period_label = label("Мел", FG, 23, True)
+        self.period_label.setWordWrap(False)
         names.addWidget(self.era_label)
         names.addWidget(self.period_label)
-        top.addLayout(names)
-        top.addStretch()
+        top.addLayout(names, 1)
         self.spin_button = button("⟳ Вращать", self.toggle_spin)
         top.addWidget(self.spin_button)
         top.addWidget(button("−", lambda: self.change_zoom(1/1.5)))
@@ -309,6 +361,26 @@ class AtlasWindow(QMainWindow):
         hint = QHBoxLayout()
         hint.addWidget(label("Перетащи глобус  ·  колесо: масштаб  ·  слои слева", MUTED, 9))
         hint.addStretch()
+        hint.addWidget(label("Чёткость", MUTED, 9))
+        self.sharpness_slider = QSlider(Qt.Horizontal)
+        self.sharpness_slider.setRange(0, MAX_SHARPNESS)
+        self.sharpness_slider.setFixedWidth(132)
+        self.sharpness_slider.setSingleStep(5)
+        self.sharpness_slider.setPageStep(25)
+        self.sharpness_slider.setValue(round(self.globe.sharpness * 100))
+        self.sharpness_slider.setToolTip(
+            "0% — мягкий рельеф, 100% — выраженные детали, 200% — максимальное усиление. "
+            "Положение берегов и исходные высоты не меняются.")
+        self.sharpness_slider.valueChanged.connect(self.change_sharpness)
+        hint.addWidget(self.sharpness_slider)
+        self.sharpness_label = label(f"{self.sharpness_slider.value()}%", CYAN, 9)
+        self.sharpness_label.setMinimumWidth(40)
+        hint.addWidget(self.sharpness_label)
+        self.sharpness_compare = QPushButton("Сравнить")
+        self.sharpness_compare.setToolTip("Удерживай, чтобы увидеть карту без усиления чёткости")
+        self.sharpness_compare.pressed.connect(lambda: self.preview_sharpness(True))
+        self.sharpness_compare.released.connect(lambda: self.preview_sharpness(False))
+        hint.addWidget(self.sharpness_compare)
         self.fps_label = label("GPU", CYAN, 9, True)
         hint.addWidget(self.fps_label)
         globe_layout.addLayout(hint)
@@ -323,6 +395,7 @@ class AtlasWindow(QMainWindow):
         time_row.addWidget(self.age_label)
         time_row.addWidget(label("млн лет назад", MUTED, 10))
         self.source_label = label("", GOLD, 9)
+        self.globe.frame_changed.connect(self.update_map_source)
         time_row.addWidget(self.source_label, 1)
         self.play_button = button("▶ Воспроизвести", self.toggle_play, True)
         time_row.addWidget(self.play_button)
@@ -364,11 +437,7 @@ class AtlasWindow(QMainWindow):
 
         legend = QHBoxLayout()
         legend.addWidget(label("ШКАЛА РЕЛЬЕФА", MUTED, 8, True))
-        for name, color in (
-            ("−5000 м", "#05235c"), ("−2500", "#065ba6"),
-            ("−250", "#22cae8"), ("0 м", "#1a5b2b"),
-            ("+800", "#9eae4e"), ("+3000", "#e6c78b"),
-        ):
+        for name, color in relief_legend():
             legend.addWidget(label(f"<span style='color:{color};'>■</span> {name}", FG, 8))
         legend.addStretch()
         self.legend_holder = QWidget()
@@ -461,6 +530,99 @@ class AtlasWindow(QMainWindow):
         layout.addWidget(label("Названия описывают современные ориентиры, а не возраст образования объектов.", MUTED, 9))
         self.render_features()
 
+    def _make_epochs_tab(self):
+        layout = self._tab("Эпохи")
+        layout.addWidget(label("ЭТАПЫ ИСТОРИИ ЗЕМЛИ", CYAN, 9, True))
+        layout.addWidget(label("Карты по эпохам", FG, 16, True))
+        layout.addWidget(label(
+            "Выбери эпоху, чтобы перейти к нужному моменту и посмотреть, "
+            "какие материки и океаны существовали в это время.",
+            MUTED, 9))
+        self.epoch_context_label = label("", GOLD, 9, True)
+        layout.addWidget(self.epoch_context_label)
+        layout.addWidget(label("ОПОРНЫЕ ДАТЫ КАРТ", CYAN, 9, True))
+        self.published_age_box = QComboBox()
+        published_ages = set(self.data.ages)
+        if not self.data.has_precambrian_dem:
+            published_ages.update(self.data.old_ages)
+        for age in sorted(published_ages, reverse=True):
+            self.published_age_box.addItem(f"{age:g} млн лет", float(age))
+        self.published_age_box.setPlaceholderText("Расчётная карта")
+        self.published_age_box.setCurrentIndex(-1)
+        self.published_age_box.setToolTip(
+            "Выбери опубликованную опорную дату. Между этими датами "
+            "приложение рассчитывает единую поверхность высот для выбранного возраста.")
+        self.published_age_box.activated.connect(self.show_published_age)
+        layout.addWidget(self.published_age_box)
+        layout.addWidget(label("ОСНОВНЫЕ ЭПОХИ", CYAN, 9, True))
+        stop_scroll = QScrollArea()
+        stop_scroll.setWidgetResizable(True)
+        stop_body = QWidget()
+        stop_body.setObjectName("epochStops")
+        stop_layout = QVBoxLayout(stop_body)
+        stop_layout.setContentsMargins(0, 0, 0, 0)
+        stop_layout.setSpacing(8)
+        for age, title, unit_key, focus_feature, description in EPOCH_STOPS:
+            stop_button = button(f"{age:>3} млн лет  ·  {title}",
+                                 lambda _=False, a=age, k=unit_key, f=focus_feature,
+                                     d=description: self.jump_to_epoch(a, k, d, f))
+            stop_button.setMinimumHeight(36)
+            stop_button.setToolTip(description)
+            stop_layout.addWidget(stop_button)
+        stop_layout.addStretch()
+        stop_scroll.setWidget(stop_body)
+        layout.addWidget(stop_scroll, 1)
+        if self.data.has_precambrian_dem:
+            source_note = (
+                "Единая палитра числового рельефа 0–750 млн лет. Древние опорные "
+                "карты: 600, 630, 690 и 750 млн лет. Между опорными датами "
+                "высоты рассчитываются для каждого миллиона лет, затем "
+                "окрашиваются как одна поверхность с единым берегом."
+            )
+        else:
+            source_note = (
+                f"Числовой рельеф до {self.data.dem_max_age:g} млн лет; глубже в прошлом "
+                "показаны иллюстрированные карты PALEOMAP 2016. Между числовыми "
+                "сетками рассчитывается одна поверхность высот."
+            )
+        self.epoch_source_note = label(source_note, GOLD, 8)
+        self.epoch_source_note.setToolTip(self.data.source_description)
+        layout.addWidget(self.epoch_source_note)
+
+    def show_published_age(self, index):
+        age = self.published_age_box.itemData(index)
+        if age is None:
+            return
+        self.playing = False
+        self.play_button.setText("▶ Воспроизвести")
+        self.set_age(age)
+
+    def jump_to_epoch(self, age, unit_key=None, description="", focus_feature_name=None):
+        if self.playing:
+            self.playing = False
+            self.play_button.setText("▶ Воспроизвести")
+        self.set_age(float(age))
+        unit = next((item for item in UNITS if item.key == unit_key), None)
+        if unit and unit.active(age):
+            self.selected_paleo_units.add(unit.key)
+            self.globe.camera_lon, self.globe.camera_lat = self.paleo_unit_position(unit, age)
+            self.globe.zoom = max(1.2, self.globe.zoom)
+        elif focus_feature_name:
+            feature = next((item for item in FEATURES + self.custom_features
+                            if item.name == focus_feature_name), None)
+            if feature:
+                self.selected_features.add(feature.name)
+                self.globe.camera_lon, self.globe.camera_lat = self.model.point(
+                    feature.lon, feature.lat, round(age))
+                self.globe.zoom = max(1.2, self.globe.zoom)
+        elif age == 0:
+            self.globe.camera_lon, self.globe.camera_lat = self.city[3], self.city[2]
+        else:
+            self.globe.camera_lon, self.globe.camera_lat = self.city_at(self.city, age)
+        self._zoom_changed()
+        self.epoch_context_label.setText(f"{age} млн лет · {description}")
+        self.globe.update()
+
     def render_features(self):
         while self.feature_layout.count():
             item = self.feature_layout.takeAt(0)
@@ -548,27 +710,49 @@ class AtlasWindow(QMainWindow):
         self.slider.setValue(tick)
         self.slider.blockSignals(False)
         self.age_label.setText(f"{self.age:.1f}" if self.playing else str(tick))
-        mode, young, old, _ = self.data.frames(self.age)
-        age_text = f"карта {young:g} млн" if young == old else f"карты {young:g}–{old:g} млн"
-        interpolated = " · интерполяция" if young != old else ""
-        source = (f"PaleoDEM 2018 · {self.data.resolution}" if mode == "dem" else
-                  f"PaleoDEM {self.data.resolution} ↔ PaleoAtlas 2016" if mode == "bridge" else
-                  "PaleoAtlas 2016")
-        self.source_label.setText(f"{source} · {age_text}{interpolated}")
-        self.legend_holder.setVisible(mode == "dem")
-        self.legacy_legend.setVisible(mode != "dem")
-        self.legacy_legend.setText(
-            "Переход между источниками: числовая шкала высот не действует"
-            if mode == "bridge" else
-            "PaleoAtlas 2016: цветная иллюстрация без числовой шкалы высот")
+        mode, published_age, _, _ = self.data.frames(self.age)
+        displayed = self.globe.displayed_frame or (mode, published_age)
+        self.update_map_source(*displayed)
         period = next(period for period in PERIODS if self.age <= period[0])
         self.era_label.setText(period[2])
         self.period_label.setText(period[1])
         self.update_paleo_context()
+        if hasattr(self, "epoch_context_label"):
+            story = age_story(tick)
+            self.epoch_context_label.setText(f"{story.heading} · {story.text}")
         now = perf_counter()
         if now - self._last_labels > .09 or not self.playing:
             self.update_location()
             self._last_labels = now
+
+    def update_map_source(self, mode, displayed_age):
+        target_mode, target_young, _, _ = self.data.frames(self.age)
+        target_age = self.age if target_mode == "dem" else target_young
+        pending = mode != target_mode or abs(displayed_age - target_age) > 0.001
+        _, younger, older, fraction = self.data.frames(displayed_age)
+        calculated = mode == "dem" and younger != older and 0.0 < fraction < 1.0
+        if calculated:
+            note = f" · расчёт по картам {younger:g}–{older:g} млн"
+        elif mode == "dem":
+            note = " · опорная карта"
+        else:
+            note = " · опорная иллюстрация"
+        if pending:
+            note += f" · загружается {self.age:g} млн"
+        source = (f"{self.data.source_name} · сетка {self.data.resolution}" if mode == "dem" else
+                  "PALEOMAP 2016 · иллюстрированная карта")
+        self.source_label.setText(f"{source} · {displayed_age:g} млн лет{note}")
+        self.source_label.setToolTip(
+            self.data.source_description + "\nПромежуточная карта — расчётная визуализация "
+            "между опубликованными сетками, а не самостоятельная научная реконструкция. "
+            "Положения городов и полигонов "
+            "рассчитываются для возраста на шкале времени.")
+        self.published_age_box.blockSignals(True)
+        self.published_age_box.setCurrentIndex(
+            -1 if calculated else self.published_age_box.findData(displayed_age))
+        self.published_age_box.blockSignals(False)
+        self.legend_holder.setVisible(mode == "dem")
+        self.legacy_legend.setVisible(mode == "atlas")
 
     def tick(self):
         now = perf_counter()
@@ -597,6 +781,19 @@ class AtlasWindow(QMainWindow):
         self.globe.zoom = max(.7, min(MAX_ZOOM, self.globe.zoom*factor))
         self._zoom_changed()
         self.globe.update()
+
+    def change_sharpness(self, value):
+        self.globe.sharpness = value / 100.0
+        self.sharpness_label.setText(f"{value}%")
+        self.globe.update()
+
+    def preview_sharpness(self, original):
+        if original:
+            self.globe.sharpness = 0.0
+            self.sharpness_label.setText("0%")
+            self.globe.update()
+        else:
+            self.change_sharpness(self.sharpness_slider.value())
 
     def _zoom_changed(self):
         self.zoom_label.setText(f"{self.globe.zoom*100:.0f}%")
@@ -866,11 +1063,6 @@ class AtlasWindow(QMainWindow):
             if z >= 0 and -30 < x < self.globe.width()+30 and -30 < y < self.globe.height()+30:
                 self._marker(painter, x, y, color, city[0], strong)
                 occupied.append((x, y))
-        if self.reference_age != age:
-            x, y, z = self.project(*self.city_at(self.city, self.reference_age), cx, cy, radius)
-            if z >= 0:
-                self._marker(painter, x, y, "#d9a6f5", f"{self.reference_age} млн")
-                occupied.append((x, y))
         for unit in active_units(age):
             if unit.key not in self.selected_paleo_units:
                 continue
@@ -915,6 +1107,7 @@ class AtlasWindow(QMainWindow):
             self.age = max(0, min(MAX_AGE, float(state.get("age", 140))))
             self.reference_age = max(0, min(MAX_AGE, int(state.get("reference_age", 0))))
             self.globe.zoom = max(.7, min(MAX_ZOOM, float(state.get("zoom", 1))))
+            self.sharpness_slider.setValue(max(0, min(MAX_SHARPNESS, int(state.get("sharpness", DEFAULT_SHARPNESS)))))
             self.selected_features = set(state.get("selected_features", []))
             self.selected_paleo_units = set(state.get("selected_paleo_units", []))
             self.custom_features = [AtlasFeature(str(v["name"]), "Своя точка", float(v["lat"]),
@@ -971,7 +1164,8 @@ class AtlasWindow(QMainWindow):
             "city_id": self.city[4] if len(self.city) > 4 else None,
             "compare_city": self.compare_city[0], "compare_city_country": self.compare_city[1],
             "compare_city_id": self.compare_city[4] if len(self.compare_city) > 4 else None,
-            "zoom": self.globe.zoom, "selected_features": sorted(self.selected_features),
+            "zoom": self.globe.zoom, "sharpness": self.sharpness_slider.value(),
+            "selected_features": sorted(self.selected_features),
             "selected_paleo_units": sorted(self.selected_paleo_units),
             "custom_features": [{"name": f.name, "lat": f.lat, "lon": f.lon, "plate": f.plate}
                                 for f in self.custom_features],
@@ -994,6 +1188,7 @@ class AtlasWindow(QMainWindow):
 
 STYLE = """
 QWidget#root {background:#061322; color:#f4f8ee; font-family:'Segoe UI'; font-size:10pt;}
+QWidget#epochStops {background:#0c2130;}
 QFrame#card, QTabWidget::pane {background:#0c2130; border:1px solid #29506a; border-radius:8px;}
 QTabWidget::tab-bar {alignment:center;}
 QTabBar::tab {background:#143347; color:#a2bdc5; padding:10px 14px; border-radius:4px;}
@@ -1026,6 +1221,8 @@ def main():
     fmt.setDepthBufferSize(24)
     QSurfaceFormat.setDefaultFormat(fmt)
     app = QApplication([])
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
     app.setStyleSheet(STYLE)
     window = AtlasWindow()
     window.showMaximized()
@@ -1033,9 +1230,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception:
-        log = Path(__file__).with_name("paleoatlas-qt-error.log")
-        log.write_text(traceback.format_exc(), encoding="utf-8")
-        raise
+    raise SystemExit(main())

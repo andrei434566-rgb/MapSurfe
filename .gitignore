@@ -219,15 +219,26 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# MapSurfe large scientific data and user-local state
-.venv/
-.downloads/
-model/
-paleoatlas_rasters/
-cities500.zip
-paleodem_*.zip
-paleodem_color_*/
-paleosloy_session.json
-paleoatlas-qt-error.log
-MapSurfe-source.zip
+# Reproducible PALEOMAP 2024 downloads and generated map textures
+/paleodem_2024.zip
+/paleodem_color_2024_*/
+/paleodem_color_*_lossless/
+/model/paleomap2024_model.zip
+*.part
+/_validation/
+
+# Local scientific assets, build output and personal settings
+/.downloads/
+/model/*.rot
+/model/*.gpml
+/paleoatlas_rasters/
+/cities500.zip
+/cities500.sqlite
+/paleodem_*.zip
+/paleodem_color_*/
+/paleosloy_session.json
+/paleoatlas-qt-error.log
+/MapSurfe-source.zip
 *.installing
+/.build/
+!/packaging/MapSurfe.spec

@@ -15,12 +15,12 @@ def main():
     atlas.color_cache.mkdir(exist_ok=True)
     started = perf_counter()
     for number, age in enumerate(atlas.ages, 1):
-        target = atlas.color_cache / f"{age:g}.jpg"
+        target = atlas.color_cache / f"{age:g}.png"
         if target.exists():
             continue
         image = atlas._dem_image(age)
-        ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
-                                   [cv2.IMWRITE_JPEG_QUALITY, 96])
+        ok, encoded = cv2.imencode(".png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
+                                   [cv2.IMWRITE_PNG_COMPRESSION, 3])
         if not ok:
             raise OSError(f"Не удалось сохранить карту {age:g} млн лет")
         temporary = target.with_suffix(".tmp")

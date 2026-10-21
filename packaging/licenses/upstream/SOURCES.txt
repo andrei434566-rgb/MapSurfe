@@ -1,0 +1,5 @@
+Additional license texts from upstream projects, retrieved 2026-10-22:
+LGPL-3.0-only.txt https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/LGPL-3.0-only.txt
+GPL-3.0-only.txt https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/GPL-3.0-only.txt
+GPL-2.0-only.txt https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/GPL-2.0-only.txt
+PyOpenGL-license.txt https://raw.githubusercontent.com/mcfletch/pyopengl/3.1.10/license.txt

@@ -1,0 +1,40 @@
+PALEOMAP PaleoDEM 2024
+
+Authors: Christopher R. Scotese, Christian Vérard, Landon Burgener,
+Reece P. Elling and Ádám T. Kocsis.
+
+Dataset: Phanerozoic-scope supplementary material to "The Cretaceous World:
+Plate Tectonics, Paleogeography, and Paleoclimate" from the PALEOMAP project.
+Version: v24221, published 2024-08-08.
+Source: https://doi.org/10.5281/zenodo.10659112
+Record: https://zenodo.org/records/10659112
+File: 5a. PaleoDEM (nc, 3601x1801).zip
+Matching plate model: 3a. PALEOMAP Global Plate Model for Paleogeographic
+Reconstructions v.19o_r1d.zip. The original forPgeog rotation and static
+polygon files are selected and renamed as scotese2024.rot and
+scotese2024_polygons.gpml; their coordinates are unchanged.
+Associated paper (please cite when using these materials in a publication):
+https://doi.org/10.1144/SP544-2024-28
+
+This dataset is licensed under the Creative Commons Attribution 4.0
+International License (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+Changes made by MapSurfe: numeric elevation grids are recolored using a
+deep blue ocean / turquoise shelf / green-to-earth-tone elevation palette.
+Matte relief shading is calculated from elevation gradients with key and fill
+lighting; the colors do not represent reconstructed vegetation or climate.
+Published snapshots can be cached as lossless PNG images.
+At published ages the source numeric grid is used. At intermediate ages,
+MapSurfe linearly interpolates the neighboring elevation grids on the GPU
+before assigning land/ocean colors and relief shading. The resulting single
+height surface uses zero elevation as its coastline; colored images are not
+cross-faded. Displayed ages and the source bracket are identified in the app.
+
+Intermediate maps are calculated visualizations made by MapSurfe, not
+independent published scientific reconstructions. This geographic-grid height
+interpolation does not separately model plate motion, erosion or sea level;
+land may emerge or disappear over large intervals between source grids.
+
+A 0.1-degree grid does not mean that every ancient valley is known.
+Precambrian coastlines, relief and continental configurations remain uncertain.
