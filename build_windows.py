@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -96,7 +97,15 @@ def main() -> int:
                "--distpath", str(args.dist_dir.resolve()),
                "--workpath", str(ROOT / ".build" / "windows"),
                str(ROOT / "packaging" / "MapSurfe.spec")]
-    subprocess.run(command, cwd=ROOT, check=True)
+    build_environment = os.environ.copy()
+    build_environment["PATH"] = os.pathsep.join(
+        entry for entry in build_environment.get("PATH", "").split(os.pathsep)
+        if entry and not (
+            "/codex-runtimes/" in entry.replace("\\", "/").lower()
+            and "/dependencies/native/" in entry.replace("\\", "/").lower()
+        )
+    )
+    subprocess.run(command, cwd=ROOT, env=build_environment, check=True)
     executable = args.dist_dir / "MapSurfe.exe"
     print(f"Built {executable.resolve()} ({executable.stat().st_size:,} bytes)", flush=True)
     return 0
