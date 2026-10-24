@@ -7,7 +7,7 @@ import sys
 
 
 APP_NAME = "MapSurfe"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.2"
 
 
 def is_frozen() -> bool:

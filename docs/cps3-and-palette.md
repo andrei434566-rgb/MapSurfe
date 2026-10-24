@@ -2,10 +2,30 @@
 
 ## Scope
 
-This update handles **CPS-3 ASCII XY polygon contours** with named records (`->NAME`),
-not regular CPS-3/ZMAP grids. It adds CRS transformations using `pyproj` and changes
+This application handles **CPS-3 ASCII XY polygon contours** with named records (`->NAME`)
+and the numbered, closed XY **CPS-3 LINES** variant described below. Regular CPS-3/ZMAP
+grids are not polygon inputs. It provides CRS transformations using `pyproj` and changes
 the *display palette* for PaleoDEM. It does **not** change heights, shorelines or
 the tectonic reconstruction model. The Qt interface `paleoatlas_qt.pyw` includes CRS and axis-order selection on CPS-3 import and a separate conversion action.
+
+### Numbered CPS-3 LINES exports
+
+The supported text variant begins with `#FSASCI 0 1 LINES 0 1e+10`, then
+`#FATTR 0 3`. A standalone integer starts each contour, followed by whitespace-separated
+X Y pairs. Decimal commas and dots are accepted. Each line must be explicitly closed
+by repeating its first coordinate pair; open lines are rejected as polygon inputs.
+Contour IDs are retained in feature names. Undefined coordinates (`1e10`), extra
+columns, other header schemas and incomplete rings produce explicit errors.
+
+The file may have a `.shp` extension: it is identified by the text header and loaded
+directly, separately from binary ESRI Shapefiles (which require ZIP plus `.prj`).
+The implemented variant follows a user-supplied photograph; the original export
+was unavailable, so it has not been validated against that file.
+
+These headers do not define a CRS. The label “ПНО-14” does not automatically select
+an EPSG code or Gauss–Krüger zone. Import requires the documented source CRS and
+column order; local systems need their actual definition. After conversion, the
+existing globe overlay and plate reconstruction paths display every contour.
 
 ## Setup
 
