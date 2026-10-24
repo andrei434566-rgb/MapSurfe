@@ -94,8 +94,9 @@ jobs:
         run: |
           import hashlib
           from pathlib import Path
+          import runpy
           import pefile
-          from runtime_paths import APP_VERSION
+          APP_VERSION = runpy.run_path("runtime_paths.py")["APP_VERSION"]
 
           if APP_VERSION != "1.1.2":
               raise RuntimeError("This publication workflow only releases version 1.1.2.")
