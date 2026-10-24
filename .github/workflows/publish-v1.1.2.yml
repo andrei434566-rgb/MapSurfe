@@ -1,10 +1,6 @@
 name: Publish MapSurfe 1.1.2 for Windows
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/publish-v1.1.2.yml
   workflow_dispatch:
 
 permissions:
@@ -146,8 +142,13 @@ jobs:
               throw "The existing release tag points to another commit; it will not be changed."
             }
           }
-          $releaseJson = gh api "repos/$env:GH_REPO/releases/tags/$tag" 2>$null
-          if ($LASTEXITCODE -eq 0) {
+          $releaseListJson = gh api "repos/$env:GH_REPO/releases"
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect existing releases." }
+          $existingReleases = @($releaseListJson | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag })
+          if ($existingReleases.Count -gt 1) { throw "Multiple matching releases exist." }
+          $releaseJson = $null
+          if ($existingReleases.Count -eq 1) { $releaseJson = $existingReleases[0] | ConvertTo-Json -Depth 20 }
+          if ($releaseJson) {
             $existing = $releaseJson | ConvertFrom-Json
             if (-not $existing.draft) { throw "This release is already published; it will not be overwritten." }
             if ($existing.name -ne $title -or $existing.target_commitish -ne $env:GITHUB_SHA) {
@@ -160,9 +161,11 @@ jobs:
           # Replacement is confined to this workflow's unpublished draft.
           gh release upload $tag dist/MapSurfe.exe dist/SHA256SUMS.txt --repo $env:GH_REPO --clobber
           if ($LASTEXITCODE -ne 0) { throw "Asset upload failed; the release remains a draft." }
-          $uploadedJson = gh api "repos/$env:GH_REPO/releases/tags/$tag"
+          $uploadedJson = gh api "repos/$env:GH_REPO/releases"
           if ($LASTEXITCODE -ne 0) { throw "Could not inspect the uploaded assets." }
-          $uploaded = $uploadedJson | ConvertFrom-Json
+          $uploadedReleases = @($uploadedJson | ConvertFrom-Json | Where-Object { $_.tag_name -eq $tag })
+          if ($uploadedReleases.Count -ne 1) { throw "The uploaded release cannot be identified." }
+          $uploaded = $uploadedReleases[0]
           foreach ($file in @("MapSurfe.exe", "SHA256SUMS.txt")) {
             $assets = @($uploaded.assets | Where-Object { $_.name -eq $file })
             $localFile = Get-Item -LiteralPath (Join-Path dist $file)

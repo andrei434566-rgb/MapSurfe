@@ -1,0 +1,106 @@
+name: Finalize verified MapSurfe 1.1.2 assets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/finalize-v1.1.2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mapsurfe-release-v1.1.2
+  cancel-in-progress: false
+
+jobs:
+  publish-verified-draft:
+    if: github.repository == 'andrei434566-rgb/MapSurfe' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Verify the existing uploaded assets and publish
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          import hashlib
+          import json
+          import os
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          repository = "andrei434566-rgb/MapSurfe"
+          release_id = 422892904
+          source_commit = "a02020bfef6580ad31d8b06b0c2e778a4b09f010"
+          current_commit = os.environ["HEAD_SHA"]
+          expected_exe_hash = "6f6d971d573c822c8c0d414938efe5d5ac64b3865dd93d4944e2435f938c1fae"
+          checksum_text = f"{expected_exe_hash}  MapSurfe.exe\n".encode("ascii")
+          expected = {
+              "MapSurfe.exe": (339359897, expected_exe_hash),
+              "SHA256SUMS.txt": (len(checksum_text), hashlib.sha256(checksum_text).hexdigest()),
+          }
+
+          def api(path, payload=None):
+              request = Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  data=None if payload is None else json.dumps(payload).encode("utf-8"),
+                  method="GET" if payload is None else "PATCH",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                      "Content-Type": "application/json",
+                      "User-Agent": "MapSurfe-release-finalizer",
+                      "X-GitHub-Api-Version": "2026-03-10",
+                  },
+              )
+              with urlopen(request, timeout=60) as response:
+                  return json.load(response)
+
+          release = api(f"releases/{release_id}")
+          if release["tag_name"] != "v1.1.2" or release["name"] != "MapSurfe 1.1.2 — импорт полигонов CPS-3":
+              raise RuntimeError("This is not the expected MapSurfe release.")
+          if release["target_commitish"] not in (source_commit, current_commit):
+              raise RuntimeError("The release target has changed; nothing will be published.")
+          assets = release["assets"]
+          if len(assets) != 2 or {asset["name"] for asset in assets} != set(expected):
+              raise RuntimeError("The draft does not contain exactly the two expected assets.")
+          for asset in assets:
+              size, digest = expected[asset["name"]]
+              if asset["state"] != "uploaded" or asset["size"] != size or asset["digest"] != "sha256:" + digest:
+                  raise RuntimeError(f"Uploaded asset failed validation: {asset['name']}")
+
+          if release["draft"]:
+              # The publication commit may only change workflow files.
+              # The application and its resources must match the successful build.
+              comparison = api(f"compare/{source_commit}...{current_commit}")
+              if comparison["status"] not in ("ahead", "identical"):
+                  raise RuntimeError("The publication commit is not derived from the build source.")
+              if any(not file["filename"].startswith(".github/workflows/") for file in comparison["files"]):
+                  raise RuntimeError("Application sources changed after the build.")
+              try:
+                  reference = api("git/ref/tags/v1.1.2")
+              except HTTPError as error:
+                  if error.code != 404:
+                      raise
+              else:
+                  if reference["object"]["type"] != "commit" or reference["object"]["sha"] not in (source_commit, current_commit):
+                      raise RuntimeError("An unrelated version tag exists; it will not be changed.")
+              # Target the approved current default-branch workflow tree.
+              release = api(f"releases/{release_id}", {
+                  "target_commitish": current_commit,
+                  "draft": False,
+                  "make_latest": "true",
+              })
+          if release["draft"] or release["tag_name"] != "v1.1.2":
+              raise RuntimeError("The release did not become public.")
+          print(json.dumps({
+              "url": release["html_url"],
+              "assets": [{"name": item["name"], "size": item["size"],
+                          "digest": item["digest"], "url": item["browser_download_url"]}
+                         for item in release["assets"]],
+          }, ensure_ascii=False))
