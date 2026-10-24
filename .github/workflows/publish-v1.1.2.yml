@@ -1,0 +1,178 @@
+name: Publish MapSurfe 1.1.2 for Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-v1.1.2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mapsurfe-release-v1.1.2
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'andrei434566-rgb/MapSurfe' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+
+      - name: Install the pinned Windows build environment
+        run: |
+          python -m pip install -r requirements-windows-lock.txt -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+
+      - name: Restore offline maps from the verified previous release
+        shell: python
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import urllib.request
+          from PyInstaller.archive.readers import CArchiveReader
+
+          base = Path(os.environ["RUNNER_TEMP"]) / "MapSurfe-v1.1.0.exe"
+          url = "https://github.com/andrei434566-rgb/MapSurfe/releases/download/v1.1.0/MapSurfe.exe"
+          expected = "897c3457495eee274a9bbf17278e715368ac60849864538ec56b1a6065fcf87b"
+          digest = hashlib.sha256()
+          with urllib.request.urlopen(url, timeout=120) as response, base.open("wb") as output:
+              while chunk := response.read(1024 * 1024):
+                  digest.update(chunk)
+                  output.write(chunk)
+          if digest.hexdigest() != expected:
+              raise RuntimeError("Previous release checksum does not match the pinned source.")
+          archive = CArchiveReader(str(base))
+          # Extract data only; the previous executable is never run.
+          required = (
+              "paleodem_2024.zip",
+              "cities500.sqlite",
+              "model/scotese2024.rot",
+              "model/scotese2024_polygons.gpml",
+              "model/SOURCE.md",
+              "model/paleodem2024-source.json",
+          )
+          for relative in required:
+              members = [name for name in archive.toc if name.replace("\\", "/") == relative]
+              if len(members) != 1:
+                  raise RuntimeError(f"Expected exactly one bundled resource: {relative}")
+              payload = archive.extract(members[0])
+              destination = Path(relative)
+              # Tracked provenance must agree with the immutable scientific assets.
+              if destination.exists():
+                  checked_in = destination.read_text(encoding="utf-8-sig")
+                  previous = payload.decode("utf-8-sig").replace("\r\n", "\n")
+                  if checked_in != previous:
+                      raise RuntimeError(f"Source provenance differs from the previous release: {relative}")
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_bytes(payload)
+              print(f"Restored {relative}: {len(payload):,} bytes")
+
+      - name: Build the standalone executable
+        run: |
+          python build_windows.py --dist-dir dist
+          if ($LASTEXITCODE -ne 0) { throw "MapSurfe build failed." }
+
+      - name: Prepare the release checksum and notes
+        shell: python
+        run: |
+          import hashlib
+          from pathlib import Path
+          import pefile
+          from runtime_paths import APP_VERSION
+
+          if APP_VERSION != "1.1.2":
+              raise RuntimeError("This publication workflow only releases version 1.1.2.")
+          executable = Path("dist/MapSurfe.exe")
+          with pefile.PE(str(executable), fast_load=False) as pe:
+              info = pe.VS_FIXEDFILEINFO[0]
+              version = (info.FileVersionMS >> 16, info.FileVersionMS & 65535,
+                         info.FileVersionLS >> 16, info.FileVersionLS & 65535)
+          if version != (1, 1, 2, 0):
+              raise RuntimeError(f"Unexpected executable version: {version}")
+          digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+          Path("dist/SHA256SUMS.txt").write_text(f"{digest}  MapSurfe.exe\n", encoding="ascii", newline="\n")
+          notes = """## Скачать и запустить
+
+          Скачайте **MapSurfe.exe** из Assets и откройте двойным щелчком. Python, установка библиотек и дополнительные архивы не нужны. Карты 0–750 млн лет, модель плит и справочник городов встроены; приложение работает офлайн.
+
+          ## Изменения
+
+          - Импорт показанного варианта CPS-3 LINES: заголовки #FSASCI / #FATTR, отдельные контуры по номерам, десятичные запятые и текстовые файлы .shp.
+          - Явный выбор исходной системы координат и порядка колонок; преобразование Shapefile по его .prj.
+          - Подбор масштаба по участку и сообщения об ошибках восстановления слоёв.
+          - Просмотр структуры проектов Isoline .ipr. Импорт их сжатой геометрии пока не реализован.
+
+          Загрузка: **Полигоны → Добавить слой**, затем укажите подтверждённую исходную СК и порядок колонок. Название «ПНО-14» не определяет географическую привязку. Поддержка LINES реализована по фотографии; оригинальный экспорт не был предоставлен для проверки.
+
+          Windows 10/11 x64, OpenGL 3.3. Эта сборка создана GitHub Actions из исходников соответствующего тега. Контрольная сумма — в SHA256SUMS.txt.
+          """
+          # Remove YAML/Python indentation from the human-readable notes.
+          import textwrap
+          notes = notes.splitlines()
+          notes = notes[0] + "\n" + textwrap.dedent("\n".join(notes[1:]))
+          Path("dist/release-notes.md").write_text(notes, encoding="utf-8", newline="\n")
+          print(f"MapSurfe.exe: {executable.stat().st_size:,} bytes; SHA256 {digest}")
+
+      - name: Upload both assets and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "v1.1.2"
+          $title = "MapSurfe 1.1.2 — импорт полигонов CPS-3"
+          $tagJson = gh api "repos/$env:GH_REPO/git/ref/tags/$tag" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $tagRef = $tagJson | ConvertFrom-Json
+            if ($tagRef.object.type -ne "commit" -or $tagRef.object.sha -ne $env:GITHUB_SHA) {
+              throw "The existing release tag points to another commit; it will not be changed."
+            }
+          }
+          $releaseJson = gh api "repos/$env:GH_REPO/releases/tags/$tag" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $existing = $releaseJson | ConvertFrom-Json
+            if (-not $existing.draft) { throw "This release is already published; it will not be overwritten." }
+            if ($existing.name -ne $title -or $existing.target_commitish -ne $env:GITHUB_SHA) {
+              throw "An unrelated draft exists; it will not be changed."
+            }
+          } else {
+            gh release create $tag --repo $env:GH_REPO --target $env:GITHUB_SHA --title $title --draft --notes-file dist/release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw "Could not create the release draft." }
+          }
+          # Replacement is confined to this workflow's unpublished draft.
+          gh release upload $tag dist/MapSurfe.exe dist/SHA256SUMS.txt --repo $env:GH_REPO --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Asset upload failed; the release remains a draft." }
+          $uploadedJson = gh api "repos/$env:GH_REPO/releases/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect the uploaded assets." }
+          $uploaded = $uploadedJson | ConvertFrom-Json
+          foreach ($file in @("MapSurfe.exe", "SHA256SUMS.txt")) {
+            $assets = @($uploaded.assets | Where-Object { $_.name -eq $file })
+            $localFile = Get-Item -LiteralPath (Join-Path dist $file)
+            $expectedDigest = "sha256:" + (Get-FileHash -LiteralPath $localFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($assets.Count -ne 1 -or $assets[0].state -ne "uploaded" -or $assets[0].size -ne $localFile.Length) {
+              throw "Asset size/state mismatch for $file; the release remains a draft."
+            }
+            if ($assets[0].digest -and $assets[0].digest -ne $expectedDigest) {
+              throw "Asset checksum mismatch for $file; the release remains a draft."
+            }
+          }
+          gh release edit $tag --repo $env:GH_REPO --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish the verified release." }
+          Write-Output "https://github.com/$env:GH_REPO/releases/tag/$tag"
